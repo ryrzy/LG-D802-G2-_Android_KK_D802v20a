@@ -203,21 +203,12 @@ using a certain resistor value - pull up and pull down - so that the pin has a
 stable value when nothing is driving the rail it is connected to, or when it's
 unconnected.
 
-Pin configuration can be programmed either using the explicit APIs described
-immediately below, or by adding configuration entries into the mapping table;
-see section "Board/machine configuration" below.
-
-For example, a platform may do the following to pull up a pin to VDD:
-
-#include <linux/pinctrl/consumer.h>
+For example, a platform may do this:
 
 ret = pin_config_set("foo-dev", "FOO_GPIO_PIN", PLATFORM_X_PULL_UP);
 
-The format and meaning of the configuration parameter, PLATFORM_X_PULL_UP
-above, is entirely defined by the pin controller driver.
-
-The pin configuration driver implements callbacks for changing pin
-configuration in the pin controller ops like this:
+To pull up a pin to VDD. The pin configuration driver implements callbacks for
+changing pin configuration in the pin controller ops like this:
 
 #include <linux/pinctrl/pinctrl.h>
 #include <linux/pinctrl/pinconf.h>
@@ -502,10 +493,14 @@ Definitions:
     {"map-i2c0", i2c0, pinctrl0, fi2c0, gi2c0}
   }
 
-  Every map must be assigned a state name, pin controller, device and
-  function. The group is not compulsory - if it is omitted the first group
-  presented by the driver as applicable for the function will be selected,
-  which is useful for simple cases.
+  Every map must be assigned a symbolic name, pin controller and function.
+  The group is not compulsory - if it is omitted the first group presented by
+  the driver as applicable for the function will be selected, which is
+  useful for simple cases.
+
+  The device name is present in map entries tied to specific devices. Maps
+  without device names are referred to as SYSTEM pinmuxes, such as can be taken
+  by the machine implementation on boot and not tied to any specific device.
 
   It is possible to map several groups to the same combination of device,
   pin controller and function. This is for cases where a certain function on
@@ -728,19 +723,19 @@ same time.
 All the above functions are mandatory to implement for a pinmux driver.
 
 
-Pin control interaction with the GPIO subsystem
-===============================================
+Pinmux interaction with the GPIO subsystem
+==========================================
 
-The public pinmux API contains two functions named pinctrl_request_gpio()
-and pinctrl_free_gpio(). These two functions shall *ONLY* be called from
+The public pinmux API contains two functions named pinmux_request_gpio()
+and pinmux_free_gpio(). These two functions shall *ONLY* be called from
 gpiolib-based drivers as part of their gpio_request() and
-gpio_free() semantics. Likewise the pinctrl_gpio_direction_[input|output]
+gpio_free() semantics. Likewise the pinmux_gpio_direction_[input|output]
 shall only be called from within respective gpio_direction_[input|output]
 gpiolib implementation.
 
 NOTE that platforms and individual drivers shall *NOT* request GPIO pins to be
-controlled e.g. muxed in. Instead, implement a proper gpiolib driver and have
-that driver request proper muxing and other control for its pins.
+muxed in. Instead, implement a proper gpiolib driver and have that driver
+request proper muxing for its pins.
 
 The function list could become long, especially if you can convert every
 individual pin into a GPIO pin independent of any other pins, and then try
@@ -749,7 +744,7 @@ the approach to define every pin as a function.
 In this case, the function array would become 64 entries for each GPIO
 setting and then the device functions.
 
-For this reason there are two functions a pin control driver can implement
+For this reason there are two functions a pinmux driver can implement
 to enable only GPIO on an individual pin: .gpio_request_enable() and
 .gpio_disable_free().
 
@@ -764,12 +759,12 @@ gpiolib driver and the affected GPIO range, pin offset and desired direction
 will be passed along to this function.
 
 Alternatively to using these special functions, it is fully allowed to use
-named functions for each GPIO pin, the pinctrl_request_gpio() will attempt to
+named functions for each GPIO pin, the pinmux_request_gpio() will attempt to
 obtain the function "gpioN" where "N" is the global GPIO pin number if no
 special GPIO-handler is registered.
 
 
-Board/machine configuration
+Pinmux board/machine configuration
 ==================================
 
 Boards and machines define how a certain complete running system is put
@@ -777,33 +772,27 @@ together, including how GPIOs and devices are muxed, how regulators are
 constrained and how the clock tree looks. Of course pinmux settings are also
 part of this.
 
-A pin controller configuration for a machine looks pretty much like a simple
-regulator configuration, so for the example array above we want to enable i2c
-and spi on the second function mapping:
+A pinmux config for a machine looks pretty much like a simple regulator
+configuration, so for the example array above we want to enable i2c and
+spi on the second function mapping:
 
 #include <linux/pinctrl/machine.h>
 
-static const struct pinctrl_map __initdata mapping[] = {
+static const struct pinmux_map __initdata pmx_mapping[] = {
 	{
+		.ctrl_dev_name = "pinctrl-foo",
+		.function = "spi0",
 		.dev_name = "foo-spi.0",
-		.name = PINCTRL_STATE_DEFAULT,
-		.type = PIN_MAP_TYPE_MUX_GROUP,
-		.ctrl_dev_name = "pinctrl-foo",
-		.data.mux.function = "spi0",
 	},
 	{
+		.ctrl_dev_name = "pinctrl-foo",
+		.function = "i2c0",
 		.dev_name = "foo-i2c.0",
-		.name = PINCTRL_STATE_DEFAULT,
-		.type = PIN_MAP_TYPE_MUX_GROUP,
-		.ctrl_dev_name = "pinctrl-foo",
-		.data.mux.function = "i2c0",
 	},
 	{
-		.dev_name = "foo-mmc.0",
-		.name = PINCTRL_STATE_DEFAULT,
-		.type = PIN_MAP_TYPE_MUX_GROUP,
 		.ctrl_dev_name = "pinctrl-foo",
-		.data.mux.function = "mmc0",
+		.function = "mmc0",
+		.dev_name = "foo-mmc.0",
 	},
 };
 
@@ -813,51 +802,21 @@ must match a function provided by the pinmux driver handling this pin range.
 
 As you can see we may have several pin controllers on the system and thus
 we need to specify which one of them that contain the functions we wish
-to map.
+to map. The map can also use struct device * directly, so there is no
+inherent need to use strings to specify .dev_name or .ctrl_dev_name, these
+are for the situation where you do not have a handle to the struct device *,
+for example if they are not yet instantiated or cumbersome to obtain.
 
 You register this pinmux mapping to the pinmux subsystem by simply:
 
-       ret = pinctrl_register_mappings(mapping, ARRAY_SIZE(mapping));
+       ret = pinmux_register_mappings(pmx_mapping, ARRAY_SIZE(pmx_mapping));
 
 Since the above construct is pretty common there is a helper macro to make
 it even more compact which assumes you want to use pinctrl-foo and position
 0 for mapping, for example:
 
-static struct pinctrl_map __initdata mapping[] = {
-	PIN_MAP_MUX_GROUP("foo-i2c.o", PINCTRL_STATE_DEFAULT, "pinctrl-foo", NULL, "i2c0"),
-};
-
-The mapping table may also contain pin configuration entries. It's common for
-each pin/group to have a number of configuration entries that affect it, so
-the table entries for configuration reference an array of config parameters
-and values. An example using the convenience macros is shown below:
-
-static unsigned long i2c_grp_configs[] = {
-	FOO_PIN_DRIVEN,
-	FOO_PIN_PULLUP,
-};
-
-static unsigned long i2c_pin_configs[] = {
-	FOO_OPEN_COLLECTOR,
-	FOO_SLEW_RATE_SLOW,
-};
-
-static struct pinctrl_map __initdata mapping[] = {
-	PIN_MAP_MUX_GROUP("foo-i2c.0", PINCTRL_STATE_DEFAULT, "pinctrl-foo", "i2c0", "i2c0"),
-	PIN_MAP_MUX_CONFIGS_GROUP("foo-i2c.0", PINCTRL_STATE_DEFAULT, "pinctrl-foo", "i2c0", i2c_grp_configs),
-	PIN_MAP_MUX_CONFIGS_PIN("foo-i2c.0", PINCTRL_STATE_DEFAULT, "pinctrl-foo", "i2c0scl", i2c_pin_configs),
-	PIN_MAP_MUX_CONFIGS_PIN("foo-i2c.0", PINCTRL_STATE_DEFAULT, "pinctrl-foo", "i2c0sda", i2c_pin_configs),
-};
-
-Finally, some devices expect the mapping table to contain certain specific
-named states. When running on hardware that doesn't need any pin controller
-configuration, the mapping table must still contain those named states, in
-order to explicitly indicate that the states were provided and intended to
-be empty. Table entry macro PIN_MAP_DUMMY_STATE serves the purpose of defining
-a named state without causing any pin controller to be programmed:
-
-static struct pinctrl_map __initdata mapping[] = {
-	PIN_MAP_DUMMY_STATE("foo-i2c.0", PINCTRL_STATE_DEFAULT),
+static struct pinmux_map __initdata pmx_mapping[] = {
+       PINMUX_MAP("I2CMAP", "pinctrl-foo", "i2c0", "foo-i2c.0"),
 };
 
 
